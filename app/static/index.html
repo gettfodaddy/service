@@ -34,6 +34,7 @@
       <nav aria-label="Разделы">
         <button class="nav-item active" data-view="overview"><span>◫</span> Обзор</button>
         <button class="nav-item" data-view="tariffs"><span>▦</span> Тарифы</button>
+        <button class="nav-item" data-view="bot"><span>✎</span> Бот</button>
         <button class="nav-item" data-view="squads"><span>◎</span> Сквады</button>
         <button class="nav-item" data-view="customers"><span>♧</span> Клиенты</button>
         <button class="nav-item" data-view="orders"><span>◈</span> Заказы</button>
@@ -61,6 +62,19 @@
         <section id="tariffsPage" class="page" hidden>
           <div class="toolbar"><div class="search-wrap"><span>⌕</span><input id="tariffSearch" type="search" placeholder="Поиск по названию тарифа"></div><span id="tariffCount" class="count-label">0 тарифов</span></div>
           <div id="tariffCards" class="tariff-grid"></div>
+        </section>
+
+        <section id="botPage" class="page" hidden>
+          <div class="bot-editor-head"><div><h2>Внешний вид бота</h2><p>Меняйте подписи, иконки, порядок и тексты. Сроки, цены и действия кнопок настраиваются отдельно.</p></div><div class="bot-editor-actions"><button id="resetBotContent" class="secondary" type="button">Исходный вид</button><button id="saveBotContent" class="primary" type="button">Сохранить изменения</button></div></div>
+          <div class="bot-editor-grid">
+            <div class="bot-editor-main">
+              <section class="surface"><div class="section-header"><div><h2>Главное меню</h2><p>Значок можно вставить прямо в подпись. Видимые кнопки идут по две в строке.</p></div></div><div id="botButtonRows" class="bot-button-rows"></div></section>
+              <section class="surface"><div class="section-header"><div><h2>Кнопки внутри разделов</h2><p>Можно менять подписи и значки. Переменные сохраняют номер заказа, цену и другие данные.</p></div></div><div id="botLabelRows" class="bot-label-rows"></div></section>
+              <section class="surface"><div class="section-header"><div><h2>Тексты экранов</h2><p>Доступные переменные показаны под каждым полем. Фигурные скобки в обычном тексте пишите двойными: {{ и }}.</p></div></div><div id="botTextRows" class="bot-text-rows"></div></section>
+              <details class="surface bot-system-details"><summary>Системные сообщения и ошибки</summary><p>Короткие уведомления при оплате, пробном доступе и обращениях.</p><div id="botSystemTextRows" class="bot-text-rows"></div></details>
+            </div>
+            <aside class="surface bot-preview-panel"><div class="section-header"><div><h2>Предпросмотр</h2><p>Так выглядит главное меню в Telegram.</p></div></div><div class="bot-preview-chat"><div id="botPreviewText" class="bot-preview-bubble"></div><div id="botPreviewButtons" class="bot-preview-buttons"></div></div></aside>
+          </div>
         </section>
 
         <section id="squadsPage" class="page" hidden>

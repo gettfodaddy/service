@@ -17,6 +17,7 @@ from .commerce import reconcile_payment, start_payment
 from .remnawave import fetch_internal_squads
 from .settings import settings
 from .storefront import router as storefront_router
+from .bot_content import get_text
 
 
 router = Router()
@@ -34,6 +35,17 @@ def keyboard(rows: list[list[tuple[str, str]]]) -> InlineKeyboardMarkup:
     ])
 
 
+def admin_keyboard() -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(text="📦 Тарифы", callback_data="a:tariffs"), InlineKeyboardButton(text="🌐 Сквады", callback_data="a:squads")],
+        [InlineKeyboardButton(text="💬 Тикеты", callback_data="a:tickets")],
+        [InlineKeyboardButton(text="🔑 Код для сайта", callback_data="a:login")],
+    ]
+    if settings.web_origin.startswith("https://"):
+        rows.append([InlineKeyboardButton(text="✎ Редактор бота на сайте", url=settings.web_origin)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 class Form(StatesGroup):
     create_name = State()
     create_traffic = State()
@@ -47,11 +59,7 @@ class Form(StatesGroup):
 async def admin_menu(message: Message):
     if not permitted(message.from_user.id if message.from_user else None):
         return
-    await message.answer("🛡 Панель администратора\n\nТарифы и сквады используют ту же базу, что и сайт.", reply_markup=keyboard([
-        [("📦 Тарифы", "a:tariffs"), ("🌐 Сквады", "a:squads")],
-        [("💬 Тикеты", "a:tickets")],
-        [("🔑 Код для сайта", "a:login")],
-    ]))
+    await message.answer("🛡 Панель администратора\n\nТарифы, сквады и редактор бота используют ту же базу, что и сайт.", reply_markup=admin_keyboard())
 
 
 @router.callback_query(F.data == "a:login")
@@ -84,11 +92,7 @@ async def list_tariffs(query: CallbackQuery):
 async def home(query: CallbackQuery):
     if not permitted(query.from_user.id):
         return await query.answer("Нет доступа", show_alert=True)
-    await query.message.edit_text("🛡 Панель администратора", reply_markup=keyboard([
-        [("📦 Тарифы", "a:tariffs"), ("🌐 Сквады", "a:squads")],
-        [("💬 Тикеты", "a:tickets")],
-        [("🔑 Код для сайта", "a:login")],
-    ]))
+    await query.message.edit_text("🛡 Панель администратора", reply_markup=admin_keyboard())
     await query.answer()
 
 
@@ -447,7 +451,7 @@ async def reconciliation_loop(bot: Bot):
                 try:
                     order = await (reconcile_payment(order_id) if has_payment else start_payment(order_id))
                     if old_status != "complete" and order.status == "complete":
-                        await bot.send_message(customer_id, "✅ Подписка активирована. Откройте «Мой ключ» в боте.")
+                        await bot.send_message(customer_id, get_text("payment_success"))
                 except Exception:
                     log.exception("Could not reconcile order %s", order_id)
         await asyncio.sleep(60)

@@ -155,6 +155,30 @@ class TicketMessage(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
 
+class BotText(Base):
+    __tablename__ = "bot_texts"
+
+    key: Mapped[str] = mapped_column(String(40), primary_key=True)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, onupdate=now_utc)
+
+
+class BotMenuButton(Base):
+    __tablename__ = "bot_menu_buttons"
+
+    action: Mapped[str] = mapped_column(String(32), primary_key=True)
+    label: Mapped[str] = mapped_column(String(64), nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    visible: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+
+class BotUiLabel(Base):
+    __tablename__ = "bot_ui_labels"
+
+    key: Mapped[str] = mapped_column(String(40), primary_key=True)
+    label: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
 engine = create_engine(settings.database_url, pool_pre_ping=True)
 SessionLocal = sessionmaker(engine, expire_on_commit=False)
 
@@ -167,3 +191,5 @@ def init_db() -> None:
             trial.periods = [TariffPeriod(days=1, price_kopeks=0)]
             db.add(trial)
             db.commit()
+        from .bot_content import ensure_bot_content
+        ensure_bot_content(db)

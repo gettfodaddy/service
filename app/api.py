@@ -13,7 +13,8 @@ from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .db import AuditEvent, Customer, LoginCode, Order, SessionLocal, SquadCache, SupportTicket, Tariff, TariffPeriod, TariffSquad, TicketMessage, WebSession, init_db, now_utc
+from .db import AuditEvent, BotMenuButton, BotText, BotUiLabel, Customer, LoginCode, Order, SessionLocal, SquadCache, SupportTicket, Tariff, TariffPeriod, TariffSquad, TicketMessage, WebSession, init_db, now_utc
+from .bot_content import ALERT_TEXTS, MENU_BUTTONS, SYSTEM_TEXTS, TEXTS, UI_LABELS, get_text, validate_label, validate_text
 from .commerce import reconcile_payment
 from . import yookassa
 from .remnawave import fetch_internal_squads
@@ -151,7 +152,7 @@ def health():
 
 @app.get("/api/public-config")
 def public_config():
-    return {"app_name": settings.app_name}
+    return {"app_name": get_text("brand_name")}
 
 
 @app.post("/api/yookassa/webhook")
@@ -186,7 +187,7 @@ async def yookassa_webhook(request: Request):
     if prior_status != "complete" and result.status == "complete" and settings.bot_token:
         bot = Bot(settings.bot_token)
         try:
-            await bot.send_message(customer_id, "✅ Оплата подтверждена. Подписка активирована. Откройте «Мой ключ» в боте.")
+            await bot.send_message(customer_id, get_text("payment_success"))
         except Exception:
             pass
         finally:
@@ -241,6 +242,78 @@ def overview(db: DB, admin_id: ADMIN):
         "open_tickets": db.scalar(select(func.count()).select_from(SupportTicket).where(SupportTicket.status == "open")) or 0,
         "events": [{"action": e.action, "detail": e.detail, "created_at": e.created_at.isoformat()} for e in db.scalars(select(AuditEvent).order_by(AuditEvent.id.desc()).limit(8))],
     }
+
+
+class BotButtonIn(BaseModel):
+    action: str
+    label: str = Field(min_length=1, max_length=64)
+    position: int = Field(ge=0, le=7)
+    visible: bool
+
+
+class BotContentIn(BaseModel):
+    texts: dict[str, str]
+    buttons: list[BotButtonIn]
+    labels: dict[str, str]
+
+
+@app.get("/api/bot-content")
+def bot_content(db: DB, admin_id: ADMIN):
+    text_rows = {row.key: row for row in db.scalars(select(BotText))}
+    button_rows = {row.action: row for row in db.scalars(select(BotMenuButton))}
+    label_rows = {row.key: row for row in db.scalars(select(BotUiLabel))}
+    return {
+        "texts": [{"key": key, "title": title, "body": (text_rows[key].body if key in text_rows else default),
+                   "default": default, "variables": sorted(variables), "max_length": 180 if key in ALERT_TEXTS else 3000,
+                   "group": "system" if key in SYSTEM_TEXTS else "main"}
+                  for key, (title, default, variables) in TEXTS.items()],
+        "buttons": [{"action": action, "label": (button_rows[action].label if action in button_rows else label),
+                     "position": (button_rows[action].position if action in button_rows else position),
+                     "visible": (button_rows[action].visible if action in button_rows else True),
+                     "default": label}
+                    for position, (action, label) in enumerate(MENU_BUTTONS)],
+        "labels": [{"key": key, "title": title, "label": (label_rows[key].label if key in label_rows else default),
+                    "default": default, "variables": sorted(variables)}
+                   for key, (title, default, variables) in UI_LABELS.items()],
+    }
+
+
+@app.put("/api/bot-content")
+def update_bot_content(payload: BotContentIn, db: DB, admin_id: ADMIN):
+    actions = {action for action, _ in MENU_BUTTONS}
+    if set(payload.texts) != set(TEXTS) or set(payload.labels) != set(UI_LABELS) or {button.action for button in payload.buttons} != actions or len(payload.buttons) != len(actions):
+        raise HTTPException(400, "Передайте полный набор текстов и кнопок")
+    if {button.position for button in payload.buttons} != set(range(len(actions))):
+        raise HTTPException(400, "Позиции кнопок должны быть уникальными")
+    if not any(button.visible for button in payload.buttons):
+        raise HTTPException(400, "Оставьте хотя бы одну кнопку главного меню")
+    try:
+        for key, body in payload.texts.items():
+            validate_text(key, body)
+        for key, label in payload.labels.items():
+            validate_label(key, label)
+        for button in payload.buttons:
+            if not button.label.strip():
+                raise ValueError("Подпись кнопки не может быть пустой")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    for key, body in payload.texts.items():
+        row = db.get(BotText, key) or BotText(key=key)
+        row.body = body.strip()
+        db.add(row)
+    for button in payload.buttons:
+        row = db.get(BotMenuButton, button.action) or BotMenuButton(action=button.action)
+        row.label = button.label.strip()
+        row.position = button.position
+        row.visible = button.visible
+        db.add(row)
+    for key, label in payload.labels.items():
+        row = db.get(BotUiLabel, key) or BotUiLabel(key=key)
+        row.label = label.strip()
+        db.add(row)
+    db.add(AuditEvent(admin_id=admin_id, action="bot.content.updated", detail="Главное меню и тексты"))
+    db.commit()
+    return {"ok": True}
 
 
 @app.get("/api/tariffs")
