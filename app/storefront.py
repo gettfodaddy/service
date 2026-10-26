@@ -9,26 +9,40 @@ from aiogram.exceptions import TelegramBadRequest
 from sqlalchemy import func, select
 
 from .commerce import aware, cancel_order, customer_for, create_order, provision_trial, reconcile_payment, start_payment
-from .db import Customer, Order, SessionLocal, SupportTicket, Tariff, TicketMessage
+from .db import AuditEvent, Customer, Order, SessionLocal, SupportTicket, Tariff, TicketMessage, now_utc
 from .settings import settings
-from .bot_content import get_menu_buttons, get_text, ui_label
+from .bot_content import get_button_appearances, get_menu_buttons, get_text, ui_label
 from . import yookassa
 
 
 router = Router()
 log = logging.getLogger(__name__)
+TICKET_STATUSES = {"open": "Открыт", "answered": "Есть ответ", "closed": "Закрыт"}
 
 
 def kb(rows: list[list[tuple[str, str]]]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=title, callback_data=data) for title, data in row]
+        [styled_button(title, callback_data=data) for title, data in row]
         for row in rows
     ])
 
 
+def styled_button(title: str, **destination: str) -> InlineKeyboardButton:
+    return InlineKeyboardButton(text=str(title), icon_custom_emoji_id=getattr(title, "icon_custom_emoji_id", None),
+                                style=getattr(title, "style", None), **destination)
+
+
 def main_kb() -> InlineKeyboardMarkup:
-    buttons = [(button.label, f"u:{button.action}") for button in get_menu_buttons()]
-    return kb([buttons[index:index + 2] for index in range(0, len(buttons), 2)])
+    appearances = get_button_appearances()
+    buttons = []
+    for button in get_menu_buttons():
+        appearance = appearances.get(button.action)
+        buttons.append(InlineKeyboardButton(
+            text=button.label, callback_data=f"u:{button.action}",
+            icon_custom_emoji_id=appearance.icon_custom_emoji_id if appearance else None,
+            style=appearance.style if appearance else None,
+        ))
+    return InlineKeyboardMarkup(inline_keyboard=[buttons[index:index + 2] for index in range(0, len(buttons), 2)])
 
 
 class TicketForm(StatesGroup):
@@ -107,8 +121,10 @@ async def buy(query: CallbackQuery):
         order = await start_payment(order.id)
     except ValueError as exc:
         return await query.answer(str(exc), show_alert=True)
-    except Exception:
+    except Exception as exc:
         log.exception("Could not create payment")
+        with SessionLocal.begin() as db:
+            db.add(AuditEvent(admin_id=0, action="payment.failed", detail=f"Клиент {query.from_user.id} · {type(exc).__name__}"))
         return await query.message.answer(get_text("payment_create_failed"))
     await render_order(query, order)
 
@@ -118,12 +134,12 @@ async def render_order(query: CallbackQuery, order: Order):
                     bonus=fmt_rub(order.bonus_kopeks), cash=fmt_rub(order.cash_kopeks), status=order.status)
     rows = []
     if order.payment_url and order.status == "pending":
-        rows.append([InlineKeyboardButton(text=ui_label("pay"), url=order.payment_url)])
-        rows.append([InlineKeyboardButton(text=ui_label("check_payment"), callback_data=f"u:check:{order.id}")])
-        rows.append([InlineKeyboardButton(text=ui_label("cancel_order"), callback_data=f"u:cancel-order:{order.id}")])
+        rows.append([styled_button(ui_label("pay"), url=order.payment_url)])
+        rows.append([styled_button(ui_label("check_payment"), callback_data=f"u:check:{order.id}")])
+        rows.append([styled_button(ui_label("cancel_order"), callback_data=f"u:cancel-order:{order.id}")])
     elif order.status == "paid":
-        rows.append([InlineKeyboardButton(text=ui_label("finish_activation"), callback_data=f"u:check:{order.id}")])
-    rows.append([InlineKeyboardButton(text=ui_label("back_catalog"), callback_data="u:catalog")])
+        rows.append([styled_button(ui_label("finish_activation"), callback_data=f"u:check:{order.id}")])
+    rows.append([styled_button(ui_label("back_catalog"), callback_data="u:catalog")])
     try:
         await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
     except TelegramBadRequest as exc:
@@ -181,8 +197,10 @@ async def trial(query: CallbackQuery):
         customer = await provision_trial(query.from_user.id)
     except ValueError as exc:
         return await query.answer(str(exc), show_alert=True)
-    except Exception:
+    except Exception as exc:
         log.exception("Trial provisioning failed")
+        with SessionLocal.begin() as db:
+            db.add(AuditEvent(admin_id=0, action="trial.failed", detail=f"Клиент {query.from_user.id} · {type(exc).__name__}"))
         return await query.answer(get_text("trial_failed"), show_alert=True)
     await query.message.edit_text(
         get_text("trial_success", subscription_url=customer.subscription_url or 'Откройте «Мой ключ» чуть позже'),
@@ -243,7 +261,7 @@ async def support(query: CallbackQuery):
     customer_for(query.from_user.id)
     with SessionLocal() as db:
         tickets = list(db.scalars(select(SupportTicket).where(SupportTicket.customer_id == query.from_user.id).order_by(SupportTicket.id.desc()).limit(5)))
-    rows = [[(ui_label("ticket", ticket_id=t.id, status=t.status), f"u:ticket:{t.id}")] for t in tickets]
+    rows = [[(ui_label("ticket", ticket_id=t.id, status=TICKET_STATUSES.get(t.status, t.status)), f"u:ticket:{t.id}")] for t in tickets]
     rows += [[(ui_label("new_ticket"), "u:ticket-new")], [(ui_label("back_home"), "u:home")]]
     await query.message.edit_text(get_text("support"), reply_markup=kb(rows))
     await query.answer()
@@ -266,6 +284,7 @@ async def ticket_new_message(message: Message, state: FSMContext):
         db.add(ticket)
         db.flush()
         db.add(TicketMessage(ticket_id=ticket.id, sender_id=message.from_user.id, text=content))
+        db.add(AuditEvent(admin_id=0, action="ticket.created", entity_id=ticket.id, detail=f"Клиент {message.from_user.id}"))
         ticket_id = ticket.id
     await state.clear()
     await message.answer(get_text("ticket_created", ticket_id=ticket_id), reply_markup=main_kb())
@@ -285,7 +304,7 @@ async def ticket_page(query: CallbackQuery):
             return await query.answer(get_text("ticket_not_found"), show_alert=True)
         messages = list(db.scalars(select(TicketMessage).where(TicketMessage.ticket_id == ticket_id).order_by(TicketMessage.id.desc()).limit(8)))
     lines = [f"{'Вы' if m.sender_id == query.from_user.id else 'Поддержка'}: {m.text[:500]}" for m in reversed(messages)]
-    await query.message.edit_text(f"💬 Тикет #{ticket_id} · {ticket.status}\n\n" + "\n\n".join(lines), reply_markup=kb([[ (ui_label("reply_ticket"), f"u:ticket-reply:{ticket_id}") ], [(ui_label("back_support"), "u:support")]]))
+    await query.message.edit_text(f"💬 Тикет #{ticket_id} · {TICKET_STATUSES.get(ticket.status, ticket.status)}\n\n" + "\n\n".join(lines), reply_markup=kb([[ (ui_label("reply_ticket"), f"u:ticket-reply:{ticket_id}") ], [(ui_label("back_support"), "u:support")]]))
     await query.answer()
 
 
@@ -313,7 +332,9 @@ async def ticket_reply_message(message: Message, state: FSMContext):
         if not ticket or ticket.customer_id != message.from_user.id:
             return await message.answer(get_text("ticket_not_found"))
         ticket.status = "open"
+        ticket.updated_at = now_utc()
         db.add(TicketMessage(ticket_id=ticket.id, sender_id=message.from_user.id, text=content))
+        db.add(AuditEvent(admin_id=0, action="ticket.customer_replied", entity_id=ticket.id, detail=f"Клиент {message.from_user.id}"))
     await state.clear()
     await message.answer(get_text("ticket_reply_sent"), reply_markup=main_kb())
     for admin_id in settings.admins:

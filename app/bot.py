@@ -62,6 +62,19 @@ async def admin_menu(message: Message):
     await message.answer("🛡 Панель администратора\n\nТарифы, сквады и редактор бота используют ту же базу, что и сайт.", reply_markup=admin_keyboard())
 
 
+@router.message(Command("emoji"))
+async def custom_emoji_ids(message: Message):
+    if not permitted(message.from_user.id if message.from_user else None):
+        return
+    source = message.reply_to_message or message
+    entities = [*(source.entities or []), *(source.caption_entities or [])]
+    ids = list(dict.fromkeys(entity.custom_emoji_id for entity in entities if entity.type == "custom_emoji" and entity.custom_emoji_id))
+    if ids:
+        await message.answer("ID кастомных эмодзи:\n" + "\n".join(ids) + "\n\nВставьте ID в редактор кнопки на сайте.")
+    else:
+        await message.answer("Отправьте боту сообщение с кастомным эмодзи, затем ответьте на него командой /emoji. Нужен именно Telegram custom emoji, обычный символ не имеет ID.")
+
+
 @router.callback_query(F.data == "a:login")
 async def login_code(query: CallbackQuery):
     if not permitted(query.from_user.id):
@@ -428,13 +441,19 @@ async def admin_ticket_reply_message(message: Message, state: FSMContext):
         if not ticket:
             return await message.answer("Тикет не найден")
         ticket.status = "answered"
+        ticket.updated_at = now_utc()
         db.add(TicketMessage(ticket_id=ticket.id, sender_id=message.from_user.id, text=content))
+        db.add(AuditEvent(admin_id=message.from_user.id, action="ticket.replied", entity_id=ticket.id,
+                          detail=f"Ответ клиенту {ticket.customer_id} · {len(content)} символов"))
         customer_id = ticket.customer_id
     await state.clear()
     try:
         await message.bot.send_message(customer_id, f"💬 Ответ по тикету #{data['ticket_id']}:\n\n{content}")
     except Exception:
         log.exception("Could not deliver ticket reply %s", data["ticket_id"])
+        with SessionLocal.begin() as db:
+            db.add(AuditEvent(admin_id=0, action="ticket.delivery_failed", entity_id=data["ticket_id"],
+                              detail=f"Telegram не доставил ответ клиенту {customer_id}"))
         await message.answer("Ответ сохранён, но Telegram не доставил его клиенту.")
     else:
         await message.answer("Ответ записан и отправлен клиенту.")

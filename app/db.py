@@ -172,6 +172,14 @@ class BotMenuButton(Base):
     visible: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
 
+class BotButtonAppearance(Base):
+    __tablename__ = "bot_button_appearance"
+
+    action: Mapped[str] = mapped_column(String(32), primary_key=True)
+    icon_custom_emoji_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    style: Mapped[str | None] = mapped_column(String(16), nullable=True)
+
+
 class BotUiLabel(Base):
     __tablename__ = "bot_ui_labels"
 

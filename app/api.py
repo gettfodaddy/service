@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from aiogram import Bot
@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .db import AuditEvent, BotMenuButton, BotText, BotUiLabel, Customer, LoginCode, Order, SessionLocal, SquadCache, SupportTicket, Tariff, TariffPeriod, TariffSquad, TicketMessage, WebSession, init_db, now_utc
+from .db import AuditEvent, BotButtonAppearance, BotMenuButton, BotText, BotUiLabel, Customer, LoginCode, Order, SessionLocal, SquadCache, SupportTicket, Tariff, TariffPeriod, TariffSquad, TicketMessage, WebSession, init_db, now_utc
 from .bot_content import ALERT_TEXTS, MENU_BUTTONS, SYSTEM_TEXTS, TEXTS, UI_LABELS, get_text, validate_label, validate_text
 from .commerce import reconcile_payment
 from . import yookassa
@@ -134,7 +134,8 @@ def save_tariff(db: Session, row: Tariff, payload: TariffIn, admin_id: int, acti
     row.squads = [TariffSquad(squad_uuid=uuid) for uuid in payload.squad_uuids]
     db.add(row)
     db.flush()
-    db.add(AuditEvent(admin_id=admin_id, action=action, entity_id=row.id, detail=row.name))
+    db.add(AuditEvent(admin_id=admin_id, action=action, entity_id=row.id,
+                      detail=f"{row.name} · {row.traffic_gb or '∞'} ГБ · {row.devices} устр. · {len(row.periods)} периодов · {len(row.squads)} сквадов · {'опубликован' if row.published else 'черновик'}"))
     db.commit()
     db.refresh(row)
     return row
@@ -183,6 +184,9 @@ async def yookassa_webhook(request: Request):
     try:
         result = await reconcile_payment(order_id)
     except Exception as exc:
+        with SessionLocal.begin() as db:
+            db.add(AuditEvent(admin_id=0, action="payment.reconciliation_failed", entity_id=order_id,
+                              detail=f"Клиент {customer_id} · {type(exc).__name__}"))
         raise HTTPException(503, "Payment reconciliation will be retried") from exc
     if prior_status != "complete" and result.status == "complete" and settings.bot_token:
         bot = Bot(settings.bot_token)
@@ -209,6 +213,7 @@ def login(payload: LoginIn, request: Request, response: Response, db: DB):
     token = secrets.token_urlsafe(32)
     csrf = secrets.token_urlsafe(24)
     db.add(WebSession(admin_id=row.admin_id, token_hash=digest(token), csrf_token=csrf, expires_at=now_utc() + timedelta(days=7)))
+    db.add(AuditEvent(admin_id=row.admin_id, action="auth.login", detail="Вход в веб-панель"))
     db.commit()
     response.set_cookie("admin_session", token, httponly=True, secure=settings.cookie_secure, samesite="strict", max_age=604800)
     return {"csrf_token": csrf}
@@ -226,6 +231,7 @@ def logout(request: Request, response: Response, db: DB, admin_id: ADMIN):
     token = request.cookies["admin_session"]
     row = db.scalar(select(WebSession).where(WebSession.token_hash == digest(token)))
     db.delete(row)
+    db.add(AuditEvent(admin_id=admin_id, action="auth.logout", detail="Выход из веб-панели"))
     db.commit()
     response.delete_cookie("admin_session")
     return {"ok": True}
@@ -240,8 +246,27 @@ def overview(db: DB, admin_id: ADMIN):
         "customers": db.scalar(select(func.count()).select_from(Customer)) or 0,
         "orders": db.scalar(select(func.count()).select_from(Order).where(Order.status == "complete")) or 0,
         "open_tickets": db.scalar(select(func.count()).select_from(SupportTicket).where(SupportTicket.status == "open")) or 0,
-        "events": [{"action": e.action, "detail": e.detail, "created_at": e.created_at.isoformat()} for e in db.scalars(select(AuditEvent).order_by(AuditEvent.id.desc()).limit(8))],
+        "events": [event_data(e) for e in db.scalars(select(AuditEvent).order_by(AuditEvent.id.desc()).limit(8))],
     }
+
+
+def event_data(event: AuditEvent) -> dict:
+    return {"id": event.id, "actor_id": event.admin_id, "action": event.action,
+            "entity_id": event.entity_id, "detail": event.detail,
+            "created_at": event.created_at.isoformat()}
+
+
+@app.get("/api/activity")
+def activity(db: DB, admin_id: ADMIN, category: str = Query(default="all", pattern="^(all|tariff|squads|ticket|bot|order|trial|payment|auth)$"),
+             page: int = Query(default=1, ge=1), limit: int = Query(default=30, ge=1, le=100)):
+    statement = select(AuditEvent)
+    count = select(func.count()).select_from(AuditEvent)
+    if category != "all":
+        statement = statement.where(AuditEvent.action.like(category + ".%"))
+        count = count.where(AuditEvent.action.like(category + ".%"))
+    total = db.scalar(count) or 0
+    rows = db.scalars(statement.order_by(AuditEvent.id.desc()).offset((page - 1) * limit).limit(limit))
+    return {"items": [event_data(row) for row in rows], "total": total, "page": page, "limit": limit}
 
 
 class BotButtonIn(BaseModel):
@@ -249,18 +274,27 @@ class BotButtonIn(BaseModel):
     label: str = Field(min_length=1, max_length=64)
     position: int = Field(ge=0, le=7)
     visible: bool
+    icon_custom_emoji_id: str | None = None
+    style: str | None = None
+
+
+class ButtonAppearanceIn(BaseModel):
+    icon_custom_emoji_id: str | None = None
+    style: str | None = None
 
 
 class BotContentIn(BaseModel):
     texts: dict[str, str]
     buttons: list[BotButtonIn]
     labels: dict[str, str]
+    label_appearances: dict[str, ButtonAppearanceIn] = Field(default_factory=dict)
 
 
 @app.get("/api/bot-content")
 def bot_content(db: DB, admin_id: ADMIN):
     text_rows = {row.key: row for row in db.scalars(select(BotText))}
     button_rows = {row.action: row for row in db.scalars(select(BotMenuButton))}
+    appearances = {row.action: row for row in db.scalars(select(BotButtonAppearance))}
     label_rows = {row.key: row for row in db.scalars(select(BotUiLabel))}
     return {
         "texts": [{"key": key, "title": title, "body": (text_rows[key].body if key in text_rows else default),
@@ -270,9 +304,13 @@ def bot_content(db: DB, admin_id: ADMIN):
         "buttons": [{"action": action, "label": (button_rows[action].label if action in button_rows else label),
                      "position": (button_rows[action].position if action in button_rows else position),
                      "visible": (button_rows[action].visible if action in button_rows else True),
+                     "icon_custom_emoji_id": appearances[action].icon_custom_emoji_id if action in appearances else None,
+                     "style": appearances[action].style if action in appearances else None,
                      "default": label}
                     for position, (action, label) in enumerate(MENU_BUTTONS)],
         "labels": [{"key": key, "title": title, "label": (label_rows[key].label if key in label_rows else default),
+                    "icon_custom_emoji_id": appearances[f"ui:{key}"].icon_custom_emoji_id if f"ui:{key}" in appearances else None,
+                    "style": appearances[f"ui:{key}"].style if f"ui:{key}" in appearances else None,
                     "default": default, "variables": sorted(variables)}
                    for key, (title, default, variables) in UI_LABELS.items()],
     }
@@ -287,6 +325,8 @@ def update_bot_content(payload: BotContentIn, db: DB, admin_id: ADMIN):
         raise HTTPException(400, "Позиции кнопок должны быть уникальными")
     if not any(button.visible for button in payload.buttons):
         raise HTTPException(400, "Оставьте хотя бы одну кнопку главного меню")
+    if not set(payload.label_appearances).issubset(UI_LABELS):
+        raise HTTPException(400, "Неизвестная кнопка внутри раздела")
     try:
         for key, body in payload.texts.items():
             validate_text(key, body)
@@ -295,6 +335,15 @@ def update_bot_content(payload: BotContentIn, db: DB, admin_id: ADMIN):
         for button in payload.buttons:
             if not button.label.strip():
                 raise ValueError("Подпись кнопки не может быть пустой")
+            if button.icon_custom_emoji_id and (not button.icon_custom_emoji_id.isascii() or not button.icon_custom_emoji_id.isdecimal() or len(button.icon_custom_emoji_id) > 30):
+                raise ValueError("ID кастомного эмодзи должен содержать только цифры")
+            if button.style not in (None, "", "primary", "success", "danger"):
+                raise ValueError("Недопустимый стиль кнопки")
+        for appearance in payload.label_appearances.values():
+            if appearance.icon_custom_emoji_id and (not appearance.icon_custom_emoji_id.isascii() or not appearance.icon_custom_emoji_id.isdecimal() or len(appearance.icon_custom_emoji_id) > 30):
+                raise ValueError("ID кастомного эмодзи должен содержать только цифры")
+            if appearance.style not in (None, "", "primary", "success", "danger"):
+                raise ValueError("Недопустимый стиль кнопки")
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     for key, body in payload.texts.items():
@@ -307,10 +356,19 @@ def update_bot_content(payload: BotContentIn, db: DB, admin_id: ADMIN):
         row.position = button.position
         row.visible = button.visible
         db.add(row)
+        appearance = db.get(BotButtonAppearance, button.action) or BotButtonAppearance(action=button.action)
+        appearance.icon_custom_emoji_id = button.icon_custom_emoji_id or None
+        appearance.style = button.style or None
+        db.add(appearance)
     for key, label in payload.labels.items():
         row = db.get(BotUiLabel, key) or BotUiLabel(key=key)
         row.label = label.strip()
         db.add(row)
+        if key in payload.label_appearances:
+            appearance = db.get(BotButtonAppearance, f"ui:{key}") or BotButtonAppearance(action=f"ui:{key}")
+            appearance.icon_custom_emoji_id = payload.label_appearances[key].icon_custom_emoji_id or None
+            appearance.style = payload.label_appearances[key].style or None
+            db.add(appearance)
     db.add(AuditEvent(admin_id=admin_id, action="bot.content.updated", detail="Главное меню и тексты"))
     db.commit()
     return {"ok": True}
@@ -382,10 +440,16 @@ def orders(db: DB, admin_id: ADMIN):
 
 @app.get("/api/tickets")
 def tickets(db: DB, admin_id: ADMIN):
-    rows = db.scalars(select(SupportTicket).order_by(SupportTicket.id.desc()).limit(200))
+    rows = list(db.scalars(select(SupportTicket).order_by(SupportTicket.updated_at.desc(), SupportTicket.id.desc()).limit(200)))
+    latest = {}
+    if rows:
+        messages = db.scalars(select(TicketMessage).where(TicketMessage.ticket_id.in_([row.id for row in rows])).order_by(TicketMessage.id))
+        latest = {message.ticket_id: message for message in messages}
     return [{
         "id": row.id, "customer_id": row.customer_id, "status": row.status,
-        "created_at": row.created_at.isoformat(),
+        "created_at": row.created_at.isoformat(), "updated_at": row.updated_at.isoformat(),
+        "preview": latest[row.id].text[:160] if row.id in latest else "",
+        "last_sender": latest[row.id].sender_id if row.id in latest else None,
     } for row in rows]
 
 
@@ -396,7 +460,29 @@ def ticket_detail(ticket_id: int, db: DB, admin_id: ADMIN):
         raise HTTPException(404, "Тикет не найден")
     messages = db.scalars(select(TicketMessage).where(TicketMessage.ticket_id == ticket_id).order_by(TicketMessage.id))
     return {"id": ticket.id, "customer_id": ticket.customer_id, "status": ticket.status,
+            "created_at": ticket.created_at.isoformat(), "updated_at": ticket.updated_at.isoformat(),
             "messages": [{"sender_id": m.sender_id, "text": m.text, "created_at": m.created_at.isoformat()} for m in messages]}
+
+
+class TicketStatusIn(BaseModel):
+    status: str
+
+
+@app.post("/api/tickets/{ticket_id}/status")
+def ticket_status(ticket_id: int, payload: TicketStatusIn, db: DB, admin_id: ADMIN):
+    if payload.status not in {"open", "answered", "closed"}:
+        raise HTTPException(400, "Недопустимый статус")
+    ticket = db.get(SupportTicket, ticket_id)
+    if not ticket:
+        raise HTTPException(404, "Тикет не найден")
+    if ticket.status != payload.status:
+        old_status = ticket.status
+        ticket.status = payload.status
+        ticket.updated_at = now_utc()
+        db.add(AuditEvent(admin_id=admin_id, action="ticket.status_changed", entity_id=ticket_id,
+                          detail=f"{old_status} → {payload.status}"))
+        db.commit()
+    return {"ok": True, "status": ticket.status}
 
 
 class TicketReplyIn(BaseModel):
@@ -409,8 +495,10 @@ async def ticket_reply(ticket_id: int, payload: TicketReplyIn, db: DB, admin_id:
     if not ticket:
         raise HTTPException(404, "Тикет не найден")
     ticket.status = "answered"
+    ticket.updated_at = now_utc()
     db.add(TicketMessage(ticket_id=ticket_id, sender_id=admin_id, text=payload.text))
-    db.add(AuditEvent(admin_id=admin_id, action="ticket.replied", entity_id=ticket_id))
+    db.add(AuditEvent(admin_id=admin_id, action="ticket.replied", entity_id=ticket_id,
+                      detail=f"Ответ клиенту {ticket.customer_id} · {len(payload.text)} символов"))
     db.commit()
     delivered = False
     if settings.bot_token:
@@ -422,4 +510,8 @@ async def ticket_reply(ticket_id: int, payload: TicketReplyIn, db: DB, admin_id:
             delivered = False
         finally:
             await bot.session.close()
+    if not delivered:
+        db.add(AuditEvent(admin_id=0, action="ticket.delivery_failed", entity_id=ticket_id,
+                          detail=f"Telegram не доставил ответ клиенту {ticket.customer_id}"))
+        db.commit()
     return {"ok": True, "delivered": delivered}

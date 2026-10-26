@@ -3,7 +3,7 @@ from string import Formatter
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .db import BotMenuButton, BotText, BotUiLabel, SessionLocal
+from .db import BotButtonAppearance, BotMenuButton, BotText, BotUiLabel, SessionLocal
 from .settings import settings
 
 
@@ -132,6 +132,11 @@ def get_menu_buttons() -> list[BotMenuButton]:
         return list(db.scalars(select(BotMenuButton).where(BotMenuButton.visible.is_(True)).order_by(BotMenuButton.position, BotMenuButton.action)))
 
 
+def get_button_appearances() -> dict[str, BotButtonAppearance]:
+    with SessionLocal() as db:
+        return {row.action: row for row in db.scalars(select(BotButtonAppearance))}
+
+
 def validate_label(key: str, label: str) -> None:
     if key not in UI_LABELS or not label.strip() or len(label) > 64:
         raise ValueError("Подпись кнопки должна содержать от 1 до 64 символов")
@@ -144,7 +149,18 @@ def validate_label(key: str, label: str) -> None:
         raise ValueError(f"Проверьте подпись кнопки: {exc}") from exc
 
 
-def ui_label(key: str, **values: object) -> str:
+class ButtonLabel(str):
+    def __new__(cls, value: str, icon_custom_emoji_id: str | None = None, style: str | None = None):
+        instance = str.__new__(cls, value)
+        instance.icon_custom_emoji_id = icon_custom_emoji_id
+        instance.style = style
+        return instance
+
+
+def ui_label(key: str, **values: object) -> ButtonLabel:
     with SessionLocal() as db:
         row = db.get(BotUiLabel, key)
-    return (row.label if row else UI_LABELS[key][1]).format_map(values)
+        appearance = db.get(BotButtonAppearance, f"ui:{key}")
+    return ButtonLabel((row.label if row else UI_LABELS[key][1]).format_map(values),
+                       appearance.icon_custom_emoji_id if appearance else None,
+                       appearance.style if appearance else None)

@@ -6,14 +6,15 @@
   <meta name="theme-color" content="#0b1020">
   <title>VPN Studio — управление сервисом</title>
   <meta name="description" content="Панель управления тарифами и доступом VPN-сервиса">
-  <link rel="stylesheet" href="/assets/styles.css">
+  <link rel="stylesheet" href="/assets/styles.css?v=2">
+  <link rel="stylesheet" href="/assets/enhancements.css?v=2">
 </head>
 <body>
   <div class="ambient ambient-one"></div><div class="ambient ambient-two"></div>
 
   <section id="loginView" class="login-shell" hidden>
     <div class="login-card">
-      <div class="brand-icon">✦</div>
+      <div class="brand-icon"><svg class="icon"><use href="/assets/icons.svg#sparkles"/></svg></div>
       <p class="eyebrow">ADMIN ACCESS</p>
       <h1>Управляйте сервисом<br><span>в одном месте.</span></h1>
       <p class="subtle">Откройте своего Telegram-бота, отправьте <code>/admin</code> и нажмите «Код для сайта».</p>
@@ -29,17 +30,17 @@
 
   <div id="appView" class="app-shell" hidden>
     <aside class="sidebar">
-      <div class="brand"><div class="brand-icon">✦</div><div><strong id="brandName">VPN Studio</strong><small>Control center</small></div></div>
+      <div class="brand"><div class="brand-icon"><svg class="icon"><use href="/assets/icons.svg#sparkles"/></svg></div><div><strong id="brandName">VPN Studio</strong><small>Control center</small></div></div>
       <p class="nav-label">УПРАВЛЕНИЕ</p>
       <nav aria-label="Разделы">
-        <button class="nav-item active" data-view="overview"><span>◫</span> Обзор</button>
-        <button class="nav-item" data-view="tariffs"><span>▦</span> Тарифы</button>
-        <button class="nav-item" data-view="bot"><span>✎</span> Бот</button>
-        <button class="nav-item" data-view="squads"><span>◎</span> Сквады</button>
-        <button class="nav-item" data-view="customers"><span>♧</span> Клиенты</button>
-        <button class="nav-item" data-view="orders"><span>◈</span> Заказы</button>
-        <button class="nav-item" data-view="tickets"><span>✉</span> Тикеты</button>
-        <button class="nav-item" data-view="activity"><span>◷</span> Журнал</button>
+        <button class="nav-item active" data-view="overview"><svg class="icon"><use href="/assets/icons.svg#overview"/></svg> Обзор</button>
+        <button class="nav-item" data-view="tariffs"><svg class="icon"><use href="/assets/icons.svg#layers"/></svg> Тарифы</button>
+        <button class="nav-item" data-view="bot"><svg class="icon"><use href="/assets/icons.svg#bot"/></svg> Бот</button>
+        <button class="nav-item" data-view="squads"><svg class="icon"><use href="/assets/icons.svg#network"/></svg> Сквады</button>
+        <button class="nav-item" data-view="customers"><svg class="icon"><use href="/assets/icons.svg#users"/></svg> Клиенты</button>
+        <button class="nav-item" data-view="orders"><svg class="icon"><use href="/assets/icons.svg#receipt"/></svg> Заказы</button>
+        <button class="nav-item" data-view="tickets"><svg class="icon"><use href="/assets/icons.svg#messages"/></svg> Тикеты</button>
+        <button class="nav-item" data-view="activity"><svg class="icon"><use href="/assets/icons.svg#history"/></svg> Журнал</button>
       </nav>
       <div class="sidebar-bottom">
         <div class="panel-connection"><i></i><div><strong>Локальная панель</strong><small>Данные из вашей базы</small></div></div>
@@ -55,12 +56,12 @@
 
         <section id="overviewPage" class="page">
           <div class="hero-card"><div><span class="hero-kicker">ВСЁ ПОД КОНТРОЛЕМ</span><h2>Ваш VPN-сервис.<br><em>Ваши правила.</em></h2><p>Создавайте тарифы, назначайте внутренние сквады Remnawave и публикуйте изменения.</p><button id="heroCreate" class="light-button">Создать тариф <span>↗</span></button></div><div class="hero-graphic"><div class="ring ring-1"></div><div class="ring ring-2"></div><div class="ring ring-3"></div><div class="core">✦</div></div></div>
-          <div class="stat-grid"><article class="stat-card"><div class="stat-icon purple">▦</div><p>Всего тарифов</p><strong id="countTariffs">—</strong><small>Включая черновики</small></article><article class="stat-card"><div class="stat-icon teal">↗</div><p>Опубликовано</p><strong id="countPublished">—</strong><small>Доступны для покупки</small></article><article class="stat-card"><div class="stat-icon blue">◎</div><p>Сквадов в панели</p><strong id="countSquads">—</strong><small>После синхронизации</small></article></div>
+          <div class="stat-grid"><article class="stat-card"><div class="stat-icon purple"><svg class="icon"><use href="/assets/icons.svg#layers"/></svg></div><p>Всего тарифов</p><strong id="countTariffs">—</strong><small>Включая черновики</small></article><article class="stat-card"><div class="stat-icon teal"><svg class="icon"><use href="/assets/icons.svg#check"/></svg></div><p>Опубликовано</p><strong id="countPublished">—</strong><small>Доступны для покупки</small></article><article class="stat-card"><div class="stat-icon blue"><svg class="icon"><use href="/assets/icons.svg#network"/></svg></div><p>Сквадов в панели</p><strong id="countSquads">—</strong><small>После синхронизации</small></article></div>
           <section class="surface activity-preview"><div class="section-header"><div><h2>Последние изменения</h2><p>Действия администраторов</p></div><button class="text-button" data-goto="activity">Весь журнал ↗</button></div><div id="overviewEvents" class="event-list empty">Пока нет действий</div></section>
         </section>
 
         <section id="tariffsPage" class="page" hidden>
-          <div class="toolbar"><div class="search-wrap"><span>⌕</span><input id="tariffSearch" type="search" placeholder="Поиск по названию тарифа"></div><span id="tariffCount" class="count-label">0 тарифов</span></div>
+          <div class="toolbar"><div class="search-wrap"><svg class="icon"><use href="/assets/icons.svg#search"/></svg><input id="tariffSearch" type="search" placeholder="Поиск по названию тарифа"></div><span id="tariffCount" class="count-label">0 тарифов</span></div>
           <div id="tariffCards" class="tariff-grid"></div>
         </section>
 
@@ -68,7 +69,7 @@
           <div class="bot-editor-head"><div><h2>Внешний вид бота</h2><p>Меняйте подписи, иконки, порядок и тексты. Сроки, цены и действия кнопок настраиваются отдельно.</p></div><div class="bot-editor-actions"><button id="resetBotContent" class="secondary" type="button">Исходный вид</button><button id="saveBotContent" class="primary" type="button">Сохранить изменения</button></div></div>
           <div class="bot-editor-grid">
             <div class="bot-editor-main">
-              <section class="surface"><div class="section-header"><div><h2>Главное меню</h2><p>Значок можно вставить прямо в подпись. Видимые кнопки идут по две в строке.</p></div></div><div id="botButtonRows" class="bot-button-rows"></div></section>
+              <section class="surface"><div class="section-header"><div><h2>Главное меню</h2><p>Подпись и Telegram custom emoji — разные поля. Видимые кнопки идут по две в строке.</p></div></div><div class="inline-note">Для кастомной иконки отправьте эмодзи боту и ответьте на него командой <code>/emoji</code>. Скопируйте полученный числовой ID в поле кнопки. Для отображения Telegram требует Premium у владельца бота или дополнительное имя бота на Fragment. Обычный эмодзи можно оставить в тексте подписи.</div><div id="botButtonRows" class="bot-button-rows"></div></section>
               <section class="surface"><div class="section-header"><div><h2>Кнопки внутри разделов</h2><p>Можно менять подписи и значки. Переменные сохраняют номер заказа, цену и другие данные.</p></div></div><div id="botLabelRows" class="bot-label-rows"></div></section>
               <section class="surface"><div class="section-header"><div><h2>Тексты экранов</h2><p>Доступные переменные показаны под каждым полем. Фигурные скобки в обычном тексте пишите двойными: {{ и }}.</p></div></div><div id="botTextRows" class="bot-text-rows"></div></section>
               <details class="surface bot-system-details"><summary>Системные сообщения и ошибки</summary><p>Короткие уведомления при оплате, пробном доступе и обращениях.</p><div id="botSystemTextRows" class="bot-text-rows"></div></details>
@@ -85,9 +86,9 @@
 
         <section id="ordersPage" class="page" hidden><div class="surface"><div class="section-header"><div><h2>Заказы</h2><p>Состояние платежей и выданных подписок.</p></div></div><div id="orderRows" class="squad-list"></div></div></section>
 
-        <section id="ticketsPage" class="page" hidden><div class="surface"><div class="section-header"><div><h2>Поддержка</h2><p>Обращения клиентов из Telegram-бота.</p></div></div><div id="ticketRows" class="squad-list"></div><div id="ticketDetail"></div></div></section>
+        <section id="ticketsPage" class="page" hidden><div class="ticket-toolbar"><div class="ticket-filters" role="group" aria-label="Статус обращений"><button class="filter-pill active" data-ticket-filter="all">Все <b id="ticketCountAll">0</b></button><button class="filter-pill" data-ticket-filter="open">Новые <b id="ticketCountOpen">0</b></button><button class="filter-pill" data-ticket-filter="answered">Отвеченные <b id="ticketCountAnswered">0</b></button><button class="filter-pill" data-ticket-filter="closed">Закрытые <b id="ticketCountClosed">0</b></button></div><input id="ticketSearch" class="control-input" type="search" placeholder="Поиск по номеру или Telegram ID" aria-label="Поиск обращений"></div><div class="ticket-workspace"><div id="ticketRows" class="ticket-list surface"></div><div id="ticketDetail" class="ticket-conversation surface"><div class="ticket-placeholder"><svg class="icon"><use href="/assets/icons.svg#messages"/></svg><strong>Выберите обращение</strong><span>Здесь появятся сообщения и действия поддержки.</span></div></div></div></section>
 
-        <section id="activityPage" class="page" hidden><div class="surface"><div class="section-header"><div><h2>Журнал изменений</h2><p>Кто и когда менял настройки.</p></div></div><div id="allEvents" class="event-list empty">Пока нет действий</div></div></section>
+        <section id="activityPage" class="page" hidden><div class="surface"><div class="section-header"><div><h2>Журнал событий</h2><p>Действия администраторов, обращения, заказы и оплаты без секретных данных.</p></div><span id="activityTotal" class="count-label"></span></div><div class="activity-toolbar"><select id="activityCategory" class="control-input" aria-label="Категория событий"><option value="all">Все категории</option><option value="tariff">Тарифы</option><option value="squads">Сквады</option><option value="bot">Бот</option><option value="ticket">Поддержка</option><option value="order">Заказы</option><option value="payment">Оплаты</option><option value="trial">Пробный доступ</option><option value="auth">Вход</option></select><div class="pager"><button id="activityPrev" class="secondary" type="button">← Назад</button><span id="activityPageNumber">1</span><button id="activityNext" class="secondary" type="button">Далее →</button></div></div><div id="allEvents" class="activity-list empty">Пока нет событий</div></div></section>
       </div>
     </main>
   </div>
@@ -108,6 +109,6 @@
       <div class="drawer-actions"><button type="button" id="cancelEdit" class="secondary">Отмена</button><button type="submit" class="primary">Сохранить тариф</button></div>
     </form>
   </aside>
-  <script src="/assets/app.js" defer></script>
+  <script src="/assets/app.js?v=2" defer></script>
 </body>
 </html>

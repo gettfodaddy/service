@@ -3,7 +3,7 @@ from decimal import Decimal
 
 from sqlalchemy import select
 
-from .db import BonusEntry, Customer, Order, SessionLocal, Tariff, now_utc
+from .db import AuditEvent, BonusEntry, Customer, Order, SessionLocal, Tariff, now_utc
 from .remnawave import create_user, get_user_by_username, reset_user_traffic, update_user
 from . import yookassa
 
@@ -56,6 +56,8 @@ def create_order(telegram_id: int, tariff_id: int, days: int) -> Order:
         )
         db.add(order)
         db.flush()
+        db.add(AuditEvent(admin_id=0, action="order.created", entity_id=order.id,
+                          detail=f"Клиент {telegram_id} · тариф {tariff.name} · {days} дн. · {order.price_kopeks / 100:.2f} ₽"))
         return order
 
 
@@ -83,6 +85,8 @@ async def start_payment(order_id: int) -> Order:
             order.provider_payment_id = payment["id"]
             order.payment_url = payment_url
             order.status = "pending"
+            db.add(AuditEvent(admin_id=0, action="payment.created", entity_id=order.id,
+                              detail=f"Клиент {order.customer_id} · {order.cash_kopeks / 100:.2f} ₽"))
             needs_fulfillment = False
     if needs_fulfillment:
         return await fulfill_order(order_id)
@@ -112,6 +116,7 @@ async def provision_trial(telegram_id: int) -> Customer:
         customer.subscription_url = remote.get("subscriptionUrl")
         customer.expire_at = parse_date(remote.get("expireAt")) or now_utc() + timedelta(days=1)
         customer.trial_used = True
+        db.add(AuditEvent(admin_id=0, action="trial.activated", detail=f"Клиент {telegram_id} · 1 день · 20 ГБ"))
         return customer
 
 
@@ -180,8 +185,12 @@ async def fulfill_order(order_id: int) -> Order:
                     reward = order.price_kopeks // 3
                     inviter.bonus_balance_kopeks += reward
                     db.add(BonusEntry(customer_id=inviter.telegram_id, order_id=order.id, kind="referral", amount_kopeks=reward))
+                    db.add(AuditEvent(admin_id=0, action="order.referral_credited", entity_id=order.id,
+                                      detail=f"Пригласивший {inviter.telegram_id} · {reward / 100:.2f} ₽"))
         order.status = "complete"
         order.completed_at = now_utc()
+        db.add(AuditEvent(admin_id=0, action="order.completed", entity_id=order.id,
+                          detail=f"Клиент {order.customer_id} · подписка активирована"))
         return order
 
 
@@ -203,12 +212,16 @@ async def reconcile_payment(order_id: int) -> Order:
             raise RuntimeError("Сумма платежа не соответствует заказу")
         if payment.get("status") == "canceled":
             order.status = "canceled"
+            db.add(AuditEvent(admin_id=0, action="payment.canceled", entity_id=order.id,
+                              detail=f"Клиент {order.customer_id}"))
             customer = db.scalar(select(Customer).where(Customer.telegram_id == order.customer_id).with_for_update())
             customer.bonus_reserved_kopeks -= order.bonus_kopeks
             return order
         if payment.get("status") != "succeeded":
             return order
         order.status = "paid"
+        db.add(AuditEvent(admin_id=0, action="payment.confirmed", entity_id=order.id,
+                          detail=f"Клиент {order.customer_id} · {order.cash_kopeks / 100:.2f} ₽"))
     return await fulfill_order(order_id)
 
 
@@ -233,4 +246,6 @@ async def cancel_order(order_id: int, customer_id: int) -> Order:
             customer = db.scalar(select(Customer).where(Customer.telegram_id == customer_id).with_for_update())
             customer.bonus_reserved_kopeks -= order.bonus_kopeks
             order.status = "canceled"
+            db.add(AuditEvent(admin_id=0, action="order.canceled", entity_id=order.id,
+                              detail=f"Клиент {customer_id}"))
         return order
