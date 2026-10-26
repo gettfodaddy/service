@@ -1,0 +1,11 @@
+.git
+.env
+.env.*
+!.env.example
+backups
+*.dump
+*.db
+*.db-journal
+__pycache__
+*.pyc
+.venv

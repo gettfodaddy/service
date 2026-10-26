@@ -1,0 +1,43 @@
+services:
+  db:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: vpn_bot
+      POSTGRES_USER: vpn_bot
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - vpn_bot_db:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vpn_bot -d vpn_bot"]
+      interval: 5s
+      retries: 12
+  web:
+    build: .
+    restart: unless-stopped
+    command: ["uvicorn", "app.api:app", "--host", "0.0.0.0", "--port", "8000"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://vpn_bot:${POSTGRES_PASSWORD}@db:5432/vpn_bot
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"]
+      interval: 5s
+      retries: 12
+  bot:
+    build: .
+    restart: unless-stopped
+    command: ["python", "-m", "app.bot"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://vpn_bot:${POSTGRES_PASSWORD}@db:5432/vpn_bot
+    depends_on:
+      web:
+        condition: service_healthy
+volumes:
+  vpn_bot_db:

@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b1020">
+  <title>VPN Studio — управление сервисом</title>
+  <meta name="description" content="Панель управления тарифами и доступом VPN-сервиса">
+  <link rel="stylesheet" href="/assets/styles.css">
+</head>
+<body>
+  <div class="ambient ambient-one"></div><div class="ambient ambient-two"></div>
+
+  <section id="loginView" class="login-shell" hidden>
+    <div class="login-card">
+      <div class="brand-icon">✦</div>
+      <p class="eyebrow">ADMIN ACCESS</p>
+      <h1>Управляйте сервисом<br><span>в одном месте.</span></h1>
+      <p class="subtle">Откройте своего Telegram-бота, отправьте <code>/admin</code> и нажмите «Код для сайта».</p>
+      <form id="loginForm">
+        <label for="loginCode">Одноразовый код</label>
+        <input id="loginCode" name="code" inputmode="numeric" pattern="[0-9]{8}" maxlength="8" placeholder="8 цифр" autocomplete="one-time-code" required>
+        <button class="primary full" type="submit">Войти в панель <span>↗</span></button>
+      </form>
+      <p id="loginError" class="form-error" role="alert"></p>
+      <p class="login-footnote">Код действует 5 минут и используется один раз.</p>
+    </div>
+  </section>
+
+  <div id="appView" class="app-shell" hidden>
+    <aside class="sidebar">
+      <div class="brand"><div class="brand-icon">✦</div><div><strong id="brandName">VPN Studio</strong><small>Control center</small></div></div>
+      <p class="nav-label">УПРАВЛЕНИЕ</p>
+      <nav aria-label="Разделы">
+        <button class="nav-item active" data-view="overview"><span>◫</span> Обзор</button>
+        <button class="nav-item" data-view="tariffs"><span>▦</span> Тарифы</button>
+        <button class="nav-item" data-view="squads"><span>◎</span> Сквады</button>
+        <button class="nav-item" data-view="activity"><span>◷</span> Журнал</button>
+      </nav>
+      <div class="sidebar-bottom">
+        <div class="panel-connection"><i></i><div><strong>Локальная панель</strong><small>Данные из вашей базы</small></div></div>
+        <button id="logoutBtn" class="quiet">Выйти ↗</button>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar"><div><span class="breadcrumb">Панель / <b id="breadcrumb">Обзор</b></span></div><div class="top-actions"><span id="adminId" class="admin-pill">Администратор</span><span class="avatar">A</span></div></header>
+      <div class="content">
+        <div class="page-heading"><div><p class="eyebrow">VPN CONTROL CENTER</p><h1 id="pageTitle">Добро пожаловать</h1><p id="pageSubtitle" class="subtle">Управляйте тарифами и доступом из одного пространства.</p></div><button id="headingAction" class="primary" hidden>＋ Создать тариф</button></div>
+        <div id="toast" class="toast" role="status" hidden></div>
+
+        <section id="overviewPage" class="page">
+          <div class="hero-card"><div><span class="hero-kicker">ВСЁ ПОД КОНТРОЛЕМ</span><h2>Ваш VPN-сервис.<br><em>Ваши правила.</em></h2><p>Создавайте тарифы, назначайте внутренние сквады Remnawave и публикуйте изменения.</p><button id="heroCreate" class="light-button">Создать тариф <span>↗</span></button></div><div class="hero-graphic"><div class="ring ring-1"></div><div class="ring ring-2"></div><div class="ring ring-3"></div><div class="core">✦</div></div></div>
+          <div class="stat-grid"><article class="stat-card"><div class="stat-icon purple">▦</div><p>Всего тарифов</p><strong id="countTariffs">—</strong><small>Включая черновики</small></article><article class="stat-card"><div class="stat-icon teal">↗</div><p>Опубликовано</p><strong id="countPublished">—</strong><small>Доступны для покупки</small></article><article class="stat-card"><div class="stat-icon blue">◎</div><p>Сквадов в панели</p><strong id="countSquads">—</strong><small>После синхронизации</small></article></div>
+          <section class="surface activity-preview"><div class="section-header"><div><h2>Последние изменения</h2><p>Действия администраторов</p></div><button class="text-button" data-goto="activity">Весь журнал ↗</button></div><div id="overviewEvents" class="event-list empty">Пока нет действий</div></section>
+        </section>
+
+        <section id="tariffsPage" class="page" hidden>
+          <div class="toolbar"><div class="search-wrap"><span>⌕</span><input id="tariffSearch" type="search" placeholder="Поиск по названию тарифа"></div><span id="tariffCount" class="count-label">0 тарифов</span></div>
+          <div id="tariffCards" class="tariff-grid"></div>
+        </section>
+
+        <section id="squadsPage" class="page" hidden>
+          <div class="surface"><div class="section-header"><div><h2>Внутренние сквады</h2><p>Список загружается из Remnawave и используется при настройке тарифов.</p></div><button id="syncSquadsBtn" class="secondary">↻ Синхронизировать</button></div><div id="squadRows" class="squad-list"></div></div>
+        </section>
+
+        <section id="activityPage" class="page" hidden><div class="surface"><div class="section-header"><div><h2>Журнал изменений</h2><p>Кто и когда менял настройки.</p></div></div><div id="allEvents" class="event-list empty">Пока нет действий</div></div></section>
+      </div>
+    </main>
+  </div>
+
+  <div id="drawerBackdrop" class="drawer-backdrop" hidden></div>
+  <aside id="tariffDrawer" class="drawer" aria-label="Редактор тарифа" aria-modal="true" role="dialog" hidden>
+    <div class="drawer-head"><div><p class="eyebrow">КАТАЛОГ</p><h2 id="drawerTitle">Новый тариф</h2></div><button id="drawerClose" class="icon-button" aria-label="Закрыть">×</button></div>
+    <form id="tariffForm" class="drawer-body">
+      <input id="tariffId" type="hidden">
+      <label>Название<input id="fieldName" required minlength="2" maxlength="60" placeholder="Например, Стандарт"></label>
+      <label>Описание<textarea id="fieldDescription" rows="3" maxlength="1000" placeholder="Коротко о преимуществах тарифа"></textarea></label>
+      <div class="field-row"><label>Трафик, ГБ <small>0 — безлимит</small><input id="fieldTraffic" type="number" min="0" required value="100"></label><label>Устройства<input id="fieldDevices" type="number" min="1" required value="1"></label></div>
+      <label>Периоды и цены <small>Дни:рубли через запятую</small><input id="fieldPeriods" required placeholder="30:299, 90:799"></label>
+      <label>Порядок в списке<input id="fieldOrder" type="number" value="0"></label>
+      <div class="field-label">Доступные внутренние сквады</div><div id="fieldSquads" class="squad-picker"></div>
+      <label class="switch-line"><input id="fieldPublished" type="checkbox"><span><strong>Опубликовать тариф</strong><small>Будет доступен новым покупателям</small></span></label>
+      <p class="help-note">Изменения тарифа применяются к новым покупкам и продлениям. Активные подписки сохраняют прежние условия.</p>
+      <div class="drawer-actions"><button type="button" id="cancelEdit" class="secondary">Отмена</button><button type="submit" class="primary">Сохранить тариф</button></div>
+    </form>
+  </aside>
+  <script src="/assets/app.js" defer></script>
+</body>
+</html>
