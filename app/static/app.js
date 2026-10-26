@@ -3,6 +3,9 @@ let csrf = '';
 let tariffs = [];
 let squads = [];
 let overview = null;
+let customers = [];
+let orders = [];
+let tickets = [];
 let activeView = 'overview';
 
 function escapeHtml(value) {
@@ -25,12 +28,15 @@ function showLogin() { $('loginView').hidden = false; $('appView').hidden = true
 function showApp() { $('loginView').hidden = true; $('appView').hidden = false; }
 
 async function loadData() {
-  [overview, tariffs, squads] = await Promise.all([request('/api/overview'), request('/api/tariffs'), request('/api/squads')]);
-  renderOverview(); renderTariffs(); renderSquads(); renderEvents();
+  [overview, tariffs, squads, customers, orders, tickets] = await Promise.all([
+    request('/api/overview'), request('/api/tariffs'), request('/api/squads'),
+    request('/api/customers'), request('/api/orders'), request('/api/tickets')
+  ]);
+  renderOverview(); renderTariffs(); renderSquads(); renderEvents(); renderCustomers(); renderOrders(); renderTickets();
 }
 function goto(view) {
   activeView = view;
-  const labels = {overview:['Обзор','Добро пожаловать','Управляйте тарифами и доступом из одного пространства.'], tariffs:['Тарифы','Тарифы','Создавайте тарифы, настраивайте цены и выбирайте сквады.'], squads:['Сквады','Сквады Remnawave','Назначайте доступные внутренние сквады вашим тарифам.'], activity:['Журнал','История изменений','Каждое действие администратора сохраняется.']};
+  const labels = {overview:['Обзор','Добро пожаловать','Управляйте сервисом из одного пространства.'], tariffs:['Тарифы','Тарифы','Настраивайте цены и сквады.'], squads:['Сквады','Сквады Remnawave','Назначайте внутренние сквады тарифам.'], customers:['Клиенты','Клиенты','Пользователи нового бота.'], orders:['Заказы','Заказы','Платежи и активации подписок.'], tickets:['Тикеты','Поддержка','Отвечайте клиентам из панели.'], activity:['Журнал','История изменений','Каждое действие администратора сохраняется.']};
   for (const name of Object.keys(labels)) $(name + 'Page').hidden = name !== view;
   document.querySelectorAll('.nav-item').forEach(node => node.classList.toggle('active',node.dataset.view === view));
   $('breadcrumb').textContent = labels[view][0]; $('pageTitle').textContent = labels[view][1]; $('pageSubtitle').textContent = labels[view][2];
@@ -57,6 +63,26 @@ function renderTariffs() {
 }
 function renderSquads() {
   $('squadRows').innerHTML = squads.map(s => `<div class="squad-row ${s.present ? '' : 'missing'}"><div><strong>${escapeHtml(s.name)}</strong><small>${escapeHtml(s.uuid)}</small></div><span class="status">${s.present ? '● Доступен' : '⚠ Нет в панели'}</span></div>`).join('') || '<p class="empty">Список пуст. Нажмите «Синхронизировать».</p>';
+}
+function renderCustomers() {
+  $('customerRows').innerHTML = customers.map(c => `<div class="squad-row"><div><strong>Telegram ${c.telegram_id}</strong><small>${escapeHtml(c.remna_username || 'Без подписки')} · ${c.trial_used ? 'триал использован' : 'триал доступен'}${c.referred_by ? ` · приглашён ${c.referred_by}` : ''}</small></div><span class="status">${money(c.balance_kopeks)}</span></div>`).join('') || '<p class="empty">Клиентов пока нет.</p>';
+}
+function renderOrders() {
+  $('orderRows').innerHTML = orders.map(o => `<div class="squad-row"><div><strong>Заказ №${o.id} · Telegram ${o.customer_id}</strong><small>${o.days} дней · бонусы ${money(o.bonus_kopeks)} · ЮKassa ${money(o.cash_kopeks)}</small></div><span class="status">${escapeHtml(o.status)}</span></div>`).join('') || '<p class="empty">Заказов пока нет.</p>';
+}
+function renderTickets() {
+  $('ticketRows').innerHTML = tickets.map(t => `<div class="squad-row"><div><strong>Тикет №${t.id} · Telegram ${t.customer_id}</strong><small>${new Date(t.created_at).toLocaleString('ru-RU')}</small></div><button class="secondary" data-ticket="${t.id}">${escapeHtml(t.status)} ↗</button></div>`).join('') || '<p class="empty">Обращений пока нет.</p>';
+}
+async function openTicket(id) {
+  const ticket = await request(`/api/tickets/${id}`);
+  $('ticketDetail').innerHTML = `<div class="ticket-detail"><h3>Тикет №${id}</h3>${ticket.messages.map(m => `<div class="ticket-message"><strong>${m.sender_id === ticket.customer_id ? 'Клиент' : 'Поддержка'}</strong><p>${escapeHtml(m.text)}</p></div>`).join('')}<form id="ticketReplyForm"><textarea id="ticketReplyText" rows="4" maxlength="4000" placeholder="Ответ клиенту" required></textarea><button class="primary" type="submit">Отправить ответ</button></form></div>`;
+  $('ticketReplyForm').addEventListener('submit', async event => {
+    event.preventDefault();
+    try {
+      const result = await request(`/api/tickets/${id}/reply`, {method:'POST', body:JSON.stringify({text:$('ticketReplyText').value.trim()})});
+      await loadData(); await openTicket(id); toast(result.delivered ? 'Ответ сохранён и отправлен' : 'Ответ сохранён, Telegram не доставил сообщение');
+    } catch (error) { toast(error.message); }
+  });
 }
 function parsePeriods(value) {
   const parts = value.split(',').map(x => x.trim()).filter(Boolean);
@@ -114,6 +140,7 @@ $('tariffCards').addEventListener('click', event => { const button=event.target.
 $('drawerClose').addEventListener('click', closeDrawer); $('drawerBackdrop').addEventListener('click', closeDrawer); $('cancelEdit').addEventListener('click', closeDrawer);
 $('tariffForm').addEventListener('submit', saveTariff);
 $('syncSquadsBtn').addEventListener('click', async () => { try { const result=await request('/api/squads/sync',{method:'POST'}); await loadData(); toast(`Получено сквадов: ${result.count}`); } catch(error) { toast(error.message); } });
+$('ticketRows').addEventListener('click', async event => { const button=event.target.closest('[data-ticket]'); if(button) { try { await openTicket(button.dataset.ticket); } catch(error) { toast(error.message); } } });
 document.addEventListener('keydown', event => { if(event.key === 'Escape') closeDrawer(); });
 (async () => {
   try { const config = await request('/api/public-config'); $('brandName').textContent = config.app_name; document.title = `${config.app_name} — управление сервисом`; } catch {}

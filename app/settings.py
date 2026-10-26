@@ -13,6 +13,13 @@ class Settings(BaseSettings):
     cookie_secure: bool = False
     web_origin: str = "http://127.0.0.1:8000"
     app_name: str = "VPN Studio"
+    bot_username: str = ""
+    support_url: str = ""
+    instructions_url: str = ""
+    reviews_url: str = ""
+    rules_url: str = ""
+    yookassa_shop_id: str = ""
+    yookassa_secret_key: str = ""
 
     @property
     def admins(self) -> set[int]:

@@ -1,22 +1,26 @@
 import asyncio
+import logging
 import secrets
 from datetime import timedelta
 from decimal import Decimal, InvalidOperation
 
 from aiogram import Bot, Dispatcher, F, Router
-from aiogram.filters import Command, CommandStart
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy import select
 
 from .api import digest
-from .db import AuditEvent, LoginCode, SessionLocal, SquadCache, Tariff, TariffPeriod, TariffSquad, init_db, now_utc
+from .db import AuditEvent, LoginCode, Order, SessionLocal, SquadCache, SupportTicket, Tariff, TariffPeriod, TariffSquad, TicketMessage, init_db, now_utc
+from .commerce import reconcile_payment, start_payment
 from .remnawave import fetch_internal_squads
 from .settings import settings
+from .storefront import router as storefront_router
 
 
 router = Router()
+log = logging.getLogger(__name__)
 
 
 def permitted(user_id: int | None) -> bool:
@@ -36,11 +40,7 @@ class Form(StatesGroup):
     create_devices = State()
     create_periods = State()
     edit_value = State()
-
-
-@router.message(CommandStart())
-async def start(message: Message):
-    await message.answer(f"🌐 {settings.app_name}\n\nЗдесь появятся покупка, пробный доступ и управление подпиской. Администратору доступна команда /admin.")
+    admin_ticket_reply = State()
 
 
 @router.message(Command("admin"))
@@ -49,6 +49,7 @@ async def admin_menu(message: Message):
         return
     await message.answer("🛡 Панель администратора\n\nТарифы и сквады используют ту же базу, что и сайт.", reply_markup=keyboard([
         [("📦 Тарифы", "a:tariffs"), ("🌐 Сквады", "a:squads")],
+        [("💬 Тикеты", "a:tickets")],
         [("🔑 Код для сайта", "a:login")],
     ]))
 
@@ -85,6 +86,7 @@ async def home(query: CallbackQuery):
         return await query.answer("Нет доступа", show_alert=True)
     await query.message.edit_text("🛡 Панель администратора", reply_markup=keyboard([
         [("📦 Тарифы", "a:tariffs"), ("🌐 Сквады", "a:squads")],
+        [("💬 Тикеты", "a:tickets")],
         [("🔑 Код для сайта", "a:login")],
     ]))
     await query.answer()
@@ -174,7 +176,7 @@ def parse_periods(value: str) -> list[TariffPeriod]:
                 raise ValueError("Too many decimal places")
         except InvalidOperation as exc:
             raise ValueError("Invalid price") from exc
-        if not days.strip().isdigit() or not 1 <= int(days) <= 366 or kopeks <= 0:
+        if not days.strip().isdigit() or not 1 <= int(days) <= 366 or kopeks < 100:
             raise ValueError("Invalid period")
         result.append(TariffPeriod(days=int(days), price_kopeks=kopeks))
     if not result or len({p.days for p in result}) != len(result):
@@ -187,7 +189,7 @@ async def create_periods(message: Message, state: FSMContext):
     try:
         periods = parse_periods(message.text or "")
     except (ValueError, TypeError):
-        return await message.answer("Формат: 30:299, 90:799. Цена должна быть больше нуля.")
+        return await message.answer("Формат: 30:299, 90:799. Цена должна быть не ниже 1 ₽.")
     data = await state.get_data()
     with SessionLocal() as db:
         row = Tariff(name=data["name"], traffic_gb=data["traffic"], devices=data["devices"])
@@ -310,7 +312,7 @@ async def toggle_publish(query: CallbackQuery):
             valid = {s.uuid for s in db.scalars(select(SquadCache).where(SquadCache.present.is_(True)))}
             if not row.squads or any(s.squad_uuid not in valid for s in row.squads):
                 return await query.answer("Выберите существующие сквады", show_alert=True)
-            if not row.is_trial and (not row.periods or any(p.price_kopeks <= 0 for p in row.periods)):
+            if not row.is_trial and (not row.periods or any(p.price_kopeks < 100 for p in row.periods)):
                 return await query.answer("Задайте цены", show_alert=True)
         row.published = not row.published
         db.add(AuditEvent(admin_id=query.from_user.id, action="tariff.publication.updated", entity_id=tariff_id, detail=str(row.published)))
@@ -357,16 +359,117 @@ async def sync_squads(query: CallbackQuery):
     await render_squads(query)
 
 
+@router.message(Command("tickets"))
+async def tickets_command(message: Message):
+    if not permitted(message.from_user.id if message.from_user else None):
+        return
+    with SessionLocal() as db:
+        tickets = list(db.scalars(select(SupportTicket).order_by(SupportTicket.id.desc()).limit(20)))
+    rows = [[(f"#{t.id} · {t.status} · {t.customer_id}", f"a:ticket:{t.id}")] for t in tickets]
+    rows.append([("← Админка", "a:home")])
+    await message.answer("💬 Тикеты поддержки", reply_markup=keyboard(rows))
+
+
+@router.callback_query(F.data == "a:tickets")
+async def tickets_page(query: CallbackQuery):
+    if not permitted(query.from_user.id):
+        return await query.answer("Нет доступа", show_alert=True)
+    with SessionLocal() as db:
+        tickets = list(db.scalars(select(SupportTicket).order_by(SupportTicket.id.desc()).limit(20)))
+    rows = [[(f"#{t.id} · {t.status} · {t.customer_id}", f"a:ticket:{t.id}")] for t in tickets]
+    rows.append([("← Админка", "a:home")])
+    await query.message.edit_text("💬 Тикеты поддержки", reply_markup=keyboard(rows))
+    await query.answer()
+
+
+@router.callback_query(F.data.startswith("a:ticket:"))
+async def admin_ticket_page(query: CallbackQuery):
+    if not permitted(query.from_user.id):
+        return await query.answer("Нет доступа", show_alert=True)
+    ticket_id = int(query.data.split(":")[2])
+    with SessionLocal() as db:
+        ticket = db.get(SupportTicket, ticket_id)
+        if not ticket:
+            return await query.answer("Тикет не найден", show_alert=True)
+        messages = list(db.scalars(select(TicketMessage).where(TicketMessage.ticket_id == ticket_id).order_by(TicketMessage.id.desc()).limit(8)))
+        lines = [f"{'Клиент' if m.sender_id == ticket.customer_id else 'Поддержка'}: {m.text[:500]}" for m in reversed(messages)]
+    await query.message.edit_text(
+        f"💬 Тикет #{ticket_id} · {ticket.status}\nКлиент: {ticket.customer_id}\n\n" + "\n\n".join(lines),
+        reply_markup=keyboard([[ ("Ответить", f"a:ticket-reply:{ticket_id}") ], [("← Тикеты", "a:tickets")]]),
+    )
+    await query.answer()
+
+
+@router.callback_query(F.data.startswith("a:ticket-reply:"))
+async def admin_ticket_reply(query: CallbackQuery, state: FSMContext):
+    if not permitted(query.from_user.id):
+        return await query.answer("Нет доступа", show_alert=True)
+    ticket_id = int(query.data.split(":")[2])
+    await state.update_data(ticket_id=ticket_id)
+    await state.set_state(Form.admin_ticket_reply)
+    await query.message.answer(f"Напишите ответ клиенту по тикету #{ticket_id}. /cancel — отмена.")
+    await query.answer()
+
+
+@router.message(Form.admin_ticket_reply)
+async def admin_ticket_reply_message(message: Message, state: FSMContext):
+    if not permitted(message.from_user.id if message.from_user else None):
+        return
+    content = (message.text or "").strip()
+    if not 1 <= len(content) <= 4000:
+        return await message.answer("Введите текст длиной до 4000 символов.")
+    data = await state.get_data()
+    with SessionLocal.begin() as db:
+        ticket = db.get(SupportTicket, data["ticket_id"])
+        if not ticket:
+            return await message.answer("Тикет не найден")
+        ticket.status = "answered"
+        db.add(TicketMessage(ticket_id=ticket.id, sender_id=message.from_user.id, text=content))
+        customer_id = ticket.customer_id
+    await state.clear()
+    try:
+        await message.bot.send_message(customer_id, f"💬 Ответ по тикету #{data['ticket_id']}:\n\n{content}")
+    except Exception:
+        log.exception("Could not deliver ticket reply %s", data["ticket_id"])
+        await message.answer("Ответ сохранён, но Telegram не доставил его клиенту.")
+    else:
+        await message.answer("Ответ записан и отправлен клиенту.")
+
+
+async def reconciliation_loop(bot: Bot):
+    while True:
+        if settings.yookassa_shop_id and settings.yookassa_secret_key:
+            with SessionLocal() as db:
+                rows = [(o.id, o.customer_id, o.status, bool(o.provider_payment_id)) for o in db.scalars(
+                    select(Order).where(Order.status.in_(["pending", "paid"])).order_by(Order.id).limit(50)
+                )]
+            for order_id, customer_id, old_status, has_payment in rows:
+                try:
+                    order = await (reconcile_payment(order_id) if has_payment else start_payment(order_id))
+                    if old_status != "complete" and order.status == "complete":
+                        await bot.send_message(customer_id, "✅ Подписка активирована. Откройте «Мой ключ» в боте.")
+                except Exception:
+                    log.exception("Could not reconcile order %s", order_id)
+        await asyncio.sleep(60)
+
+
 async def main():
     if not settings.bot_token:
         raise RuntimeError("BOT_TOKEN is required")
     init_db()
     bot = Bot(settings.bot_token)
     dispatcher = Dispatcher()
+    dispatcher.include_router(storefront_router)
     dispatcher.include_router(router)
+    worker = asyncio.create_task(reconciliation_loop(bot))
     try:
         await dispatcher.start_polling(bot)
     finally:
+        worker.cancel()
+        try:
+            await worker
+        except asyncio.CancelledError:
+            pass
         await bot.session.close()
 
 

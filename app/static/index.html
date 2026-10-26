@@ -35,6 +35,9 @@
         <button class="nav-item active" data-view="overview"><span>◫</span> Обзор</button>
         <button class="nav-item" data-view="tariffs"><span>▦</span> Тарифы</button>
         <button class="nav-item" data-view="squads"><span>◎</span> Сквады</button>
+        <button class="nav-item" data-view="customers"><span>♧</span> Клиенты</button>
+        <button class="nav-item" data-view="orders"><span>◈</span> Заказы</button>
+        <button class="nav-item" data-view="tickets"><span>✉</span> Тикеты</button>
         <button class="nav-item" data-view="activity"><span>◷</span> Журнал</button>
       </nav>
       <div class="sidebar-bottom">
@@ -63,6 +66,12 @@
         <section id="squadsPage" class="page" hidden>
           <div class="surface"><div class="section-header"><div><h2>Внутренние сквады</h2><p>Список загружается из Remnawave и используется при настройке тарифов.</p></div><button id="syncSquadsBtn" class="secondary">↻ Синхронизировать</button></div><div id="squadRows" class="squad-list"></div></div>
         </section>
+
+        <section id="customersPage" class="page" hidden><div class="surface"><div class="section-header"><div><h2>Клиенты</h2><p>Тестовая база нового бота. Действующие клиенты Bedolaga сюда не перенесены.</p></div></div><div id="customerRows" class="squad-list"></div></div></section>
+
+        <section id="ordersPage" class="page" hidden><div class="surface"><div class="section-header"><div><h2>Заказы</h2><p>Состояние платежей и выданных подписок.</p></div></div><div id="orderRows" class="squad-list"></div></div></section>
+
+        <section id="ticketsPage" class="page" hidden><div class="surface"><div class="section-header"><div><h2>Поддержка</h2><p>Обращения клиентов из Telegram-бота.</p></div></div><div id="ticketRows" class="squad-list"></div><div id="ticketDetail"></div></div></section>
 
         <section id="activityPage" class="page" hidden><div class="surface"><div class="section-header"><div><h2>Журнал изменений</h2><p>Кто и когда менял настройки.</p></div></div><div id="allEvents" class="event-list empty">Пока нет действий</div></div></section>
       </div>

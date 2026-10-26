@@ -8,11 +8,14 @@ from typing import Annotated
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from aiogram import Bot
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .db import AuditEvent, LoginCode, SessionLocal, SquadCache, Tariff, TariffPeriod, TariffSquad, WebSession, init_db, now_utc
+from .db import AuditEvent, Customer, LoginCode, Order, SessionLocal, SquadCache, SupportTicket, Tariff, TariffPeriod, TariffSquad, TicketMessage, WebSession, init_db, now_utc
+from .commerce import reconcile_payment
+from . import yookassa
 from .remnawave import fetch_internal_squads
 from .settings import settings
 
@@ -85,8 +88,8 @@ class TariffIn(BaseModel):
     def check(self):
         if len({period.days for period in self.periods}) != len(self.periods):
             raise ValueError("Повторяющийся период")
-        if not self.is_trial and any(period.price_kopeks <= 0 for period in self.periods):
-            raise ValueError("Цена платного тарифа должна быть больше нуля")
+        if not self.is_trial and any(period.price_kopeks < 100 for period in self.periods):
+            raise ValueError("Цена платного тарифа должна быть не ниже 1 ₽")
         if self.published and not self.squad_uuids:
             raise ValueError("Для публикации выберите хотя бы один сквад")
         if len(set(self.squad_uuids)) != len(self.squad_uuids):
@@ -151,6 +154,46 @@ def public_config():
     return {"app_name": settings.app_name}
 
 
+@app.post("/api/yookassa/webhook")
+async def yookassa_webhook(request: Request):
+    payload = await request.json()
+    if payload.get("type") != "notification" or payload.get("event") not in {"payment.succeeded", "payment.canceled"}:
+        return {"ok": True}
+    payment = payload.get("object") or {}
+    payment_id = payment.get("id")
+    if not isinstance(payment_id, str):
+        raise HTTPException(400, "Missing payment ID")
+    with SessionLocal() as db:
+        order = db.scalar(select(Order).where(Order.provider_payment_id == payment_id))
+    if not order:
+        # A fast notification can arrive before create_payment() stores its ID.
+        verified = await yookassa.get_payment(payment_id)
+        claimed_id = str(verified.get("metadata", {}).get("order_id", ""))
+        if not claimed_id.isdigit():
+            return {"ok": True}
+        with SessionLocal.begin() as db:
+            order = db.scalar(select(Order).where(Order.id == int(claimed_id)).with_for_update())
+            if not order or order.provider_payment_id not in (None, payment_id):
+                return {"ok": True}
+            order.provider_payment_id = payment_id
+    order_id, customer_id, prior_status = order.id, order.customer_id, order.status
+    # Never trust a notification body as proof of payment. Read the actual
+    # payment from YooKassa with our own credentials before provisioning.
+    try:
+        result = await reconcile_payment(order_id)
+    except Exception as exc:
+        raise HTTPException(503, "Payment reconciliation will be retried") from exc
+    if prior_status != "complete" and result.status == "complete" and settings.bot_token:
+        bot = Bot(settings.bot_token)
+        try:
+            await bot.send_message(customer_id, "✅ Оплата подтверждена. Подписка активирована. Откройте «Мой ключ» в боте.")
+        except Exception:
+            pass
+        finally:
+            await bot.session.close()
+    return {"ok": True}
+
+
 @app.post("/api/login")
 def login(payload: LoginIn, request: Request, response: Response, db: DB):
     origin = request.headers.get("Origin")
@@ -193,6 +236,9 @@ def overview(db: DB, admin_id: ADMIN):
         "tariffs": db.scalar(select(func.count()).select_from(Tariff)) or 0,
         "published": db.scalar(select(func.count()).select_from(Tariff).where(Tariff.published.is_(True))) or 0,
         "squads": db.scalar(select(func.count()).select_from(SquadCache).where(SquadCache.present.is_(True))) or 0,
+        "customers": db.scalar(select(func.count()).select_from(Customer)) or 0,
+        "orders": db.scalar(select(func.count()).select_from(Order).where(Order.status == "complete")) or 0,
+        "open_tickets": db.scalar(select(func.count()).select_from(SupportTicket).where(SupportTicket.status == "open")) or 0,
         "events": [{"action": e.action, "detail": e.detail, "created_at": e.created_at.isoformat()} for e in db.scalars(select(AuditEvent).order_by(AuditEvent.id.desc()).limit(8))],
     }
 
@@ -237,3 +283,70 @@ async def sync_squads(db: DB, admin_id: ADMIN):
     db.add(AuditEvent(admin_id=admin_id, action="squads.synced", detail=str(len(remote))))
     db.commit()
     return {"count": len(remote)}
+
+
+@app.get("/api/customers")
+def customers(db: DB, admin_id: ADMIN):
+    rows = db.scalars(select(Customer).order_by(Customer.created_at.desc()).limit(200))
+    return [{
+        "telegram_id": row.telegram_id, "referred_by": row.referred_by,
+        "trial_used": row.trial_used, "balance_kopeks": row.bonus_balance_kopeks,
+        "remna_username": row.remna_username,
+        "expire_at": row.expire_at.isoformat() if row.expire_at else None,
+    } for row in rows]
+
+
+@app.get("/api/orders")
+def orders(db: DB, admin_id: ADMIN):
+    rows = db.scalars(select(Order).order_by(Order.id.desc()).limit(200))
+    return [{
+        "id": row.id, "customer_id": row.customer_id, "status": row.status,
+        "days": row.days, "price_kopeks": row.price_kopeks,
+        "bonus_kopeks": row.bonus_kopeks, "cash_kopeks": row.cash_kopeks,
+        "created_at": row.created_at.isoformat(),
+    } for row in rows]
+
+
+@app.get("/api/tickets")
+def tickets(db: DB, admin_id: ADMIN):
+    rows = db.scalars(select(SupportTicket).order_by(SupportTicket.id.desc()).limit(200))
+    return [{
+        "id": row.id, "customer_id": row.customer_id, "status": row.status,
+        "created_at": row.created_at.isoformat(),
+    } for row in rows]
+
+
+@app.get("/api/tickets/{ticket_id}")
+def ticket_detail(ticket_id: int, db: DB, admin_id: ADMIN):
+    ticket = db.get(SupportTicket, ticket_id)
+    if not ticket:
+        raise HTTPException(404, "Тикет не найден")
+    messages = db.scalars(select(TicketMessage).where(TicketMessage.ticket_id == ticket_id).order_by(TicketMessage.id))
+    return {"id": ticket.id, "customer_id": ticket.customer_id, "status": ticket.status,
+            "messages": [{"sender_id": m.sender_id, "text": m.text, "created_at": m.created_at.isoformat()} for m in messages]}
+
+
+class TicketReplyIn(BaseModel):
+    text: str = Field(min_length=1, max_length=4000)
+
+
+@app.post("/api/tickets/{ticket_id}/reply")
+async def ticket_reply(ticket_id: int, payload: TicketReplyIn, db: DB, admin_id: ADMIN):
+    ticket = db.get(SupportTicket, ticket_id)
+    if not ticket:
+        raise HTTPException(404, "Тикет не найден")
+    ticket.status = "answered"
+    db.add(TicketMessage(ticket_id=ticket_id, sender_id=admin_id, text=payload.text))
+    db.add(AuditEvent(admin_id=admin_id, action="ticket.replied", entity_id=ticket_id))
+    db.commit()
+    delivered = False
+    if settings.bot_token:
+        bot = Bot(settings.bot_token)
+        try:
+            await bot.send_message(ticket.customer_id, f"💬 Ответ по тикету #{ticket_id}:\n\n{payload.text}")
+            delivered = True
+        except Exception:
+            delivered = False
+        finally:
+            await bot.session.close()
+    return {"ok": True, "delivered": delivered}
